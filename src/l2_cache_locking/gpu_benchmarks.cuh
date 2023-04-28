@@ -1,255 +1,35 @@
-// ---------------------------------------------------------------------
-// ---------------------------------------------------------------------
-// GCALASY project
-// Copyright (C) 2023 ISAE
-// 
-// Purpose:
-// Studying the response of cache memory interference to hardware-based 
-// cache locking technique on iGPUs
-//
-// Contacts:
-// alfonso.mascarenas-gonzalez@isae-supaero.fr
-// jean-baptiste.chaudron@isae-supaero.fr
-// ---------------------------------------------------------------------
-// ---------------------------------------------------------------------
-
 /*--------------------------- gpu_benchmarks.cuh ---------------------
 |  File gpu_benchmarks.cuh
 |
-|  Description: CUDA kernel declarations for the GPU benchmarks  
+|  Description: CUDA kernel declarations for the GPU benchmarks.
+|	
+|  Note: Benchmarks are functional but not optimized. Used for testing.
 |
-|  Version: 1.0
+|  Version: 1.1
 *-----------------------------------------------------------------------*/
  
  
- /* MatrixMulCUDA
+/* conv2DCUDA
  *
- * Description: CUDA kernel for the dot product of two matrices
- *		Obtained from NVIDIA sample: 
- *		https://github.com/NVIDIA/cuda-samples/blob/master/Samples/0_Introduction/matrixMul/matrixMul.cu  
- *
- * template:
- *		- int BLOCK_SIZE: Number of threads making up a block 
- *
- * Parameter:   
- *		- float *C: Resultant matrix
- *		- float *A: First matrix
- *		- float *B: Second matrix
- *		- float wA: Matrix A width
- *		- float wB: Matrix B width
- *
- * Returns:     Nothing
- *
- * */
-template <int BLOCK_SIZE> __global__ void MatrixMulCUDA(float *C, float *A, float *B, int wA, int wB) {
-
-  // Block index
-  int bx = blockIdx.x;
-  int by = blockIdx.y;
-
-  // Thread index
-  int tx = threadIdx.x;
-  int ty = threadIdx.y;
-
-  // Index of the first sub-matrix of A processed by the block
-  int aBegin = wA * BLOCK_SIZE * by;
-
-  // Index of the last sub-matrix of A processed by the block
-  int aEnd   = aBegin + wA - 1;
-
-  // Step size used to iterate through the sub-matrices of A
-  int aStep  = BLOCK_SIZE;
-
-  // Index of the first sub-matrix of B processed by the block
-  int bBegin = BLOCK_SIZE * bx;
-
-  // Step size used to iterate through the sub-matrices of B
-  int bStep  = BLOCK_SIZE * wB;
-
-  // Csub is used to store the element of the block sub-matrix
-  // that is computed by the thread
-  float Csub = 0;
-
-  // Loop over all the sub-matrices of A and B
-  // required to compute the block sub-matrix
-  for (int a = aBegin, b = bBegin; a <= aEnd; a += aStep, b += bStep) {
-	    // Declaration of the shared memory array As used to
-	    // store the sub-matrix of A
-	    __shared__ float As[BLOCK_SIZE][BLOCK_SIZE];
-
-	    // Declaration of the shared memory array Bs used to
-	    // store the sub-matrix of B
-	    __shared__ float Bs[BLOCK_SIZE][BLOCK_SIZE];
-
-	    // Load the matrices from device memory
-	    // to shared memory; each thread loads
-	    // one element of each matrix
-	    As[ty][tx] = A[a + wA * ty + tx];
-	    Bs[ty][tx] = B[b + wB * ty + tx];
-
-	    // Synchronize to make sure the matrices are loaded
-	    __syncthreads();
-
-	    // Multiply the two matrices together;
-	    // each thread computes one element
-	    // of the block sub-matrix
-	#pragma unroll
-	    for (int k = 0; k < BLOCK_SIZE; ++k) 
-	    	Csub += As[ty][k] * Bs[k][tx];
-	    
-	    // Synchronize to make sure that the preceding
-	    // computation is done before loading two new
-	    // sub-matrices of A and B in the next iteration
-	    __syncthreads();
-  }
-
-  // Write the block sub-matrix to device memory;
-  // each thread writes one element
-  int c = wB * BLOCK_SIZE * by + BLOCK_SIZE * bx;
-  C[c + wB * ty + tx] = Csub;
-}
-
-
-/* MatrixVectorMulCUDAv3
- *
- * Description: CUDA kernel for the dot product of a matrix and a vector 
- *		A thread block performs a row operation.  
- *
- * template:
- *		- int BLOCK_SIZE: Number of threads making up a block 
- *
- * Parameter:   
- *		- float *C: Resultant vector
- *		- float *A: First matrix (m x n)
- *		- float *B: First vector (n x 1)
- *		- float wA: Matrix A width
- *
- * Returns:     Nothing
- *
- * */
-template <int BLOCK_SIZE> __global__ void MatrixVectorMulCUDAv3(float *C, float *A, float *B, int wA){
-
-  // Block index
-  int bx = blockIdx.x;
-
-  // Thread index
-  int tx = threadIdx.x;
-
-  // Store a final matrix row x vector multiplication 
-  float sum = 0;
-
-  // Store a matrix row x vector multiplication per thread 
-  __shared__ float sum_vec[BLOCK_SIZE];
-  sum_vec[tx] = 0;
-  	
-  // Wait for initialization
-  __syncthreads();
-  
-  // Move through one matrix row
-  #pragma unroll
-  for (int cnt = 0; cnt < wA; cnt += BLOCK_SIZE) 
-  	sum_vec[tx] += A[tx + cnt] * B[tx + cnt];
-  
-  __syncthreads();
-  
-  // Make one thread perform the final addition and write to the device memory
-  if (tx == 0){
-    	#pragma unroll	    
-  	for (int cnt = 0; cnt < BLOCK_SIZE; cnt++) 
-	  	sum += sum_vec[cnt];
-	  	
-  	// Write to device memory a matrix row x vector multiplication
-  	C[bx] = sum;
-  }
-}
-
-
-
-/* MatrixVectorMulCUDAv4
- *
- * Description: CUDA kernel for the dot product of a matrix and a vector. 
- *		In contrast to MatrixVectorMulCUDAv3, here we assume that a single thread block performs
- *		the whole matrix-vector dot product multiplication. This makes this entire operation 
- * 		be performed on 1 SM, leaving other SMs free for other matrix-vector operations.
- *		    
- * template:
- *		- int BLOCK_SIZE: Number of threads making up a block 
- *
- * Parameter:   
- *		- float *C: Resultant vector
- *		- float *A: First matrix (m x n)
- *		- float *B: First vector (n x 1)
- *		- float wA: Matrix A width
- *		- float hA: Matrix A height
- *
- * Returns:     Nothing
- *
- * */
-template <int BLOCK_SIZE> __global__ void MatrixVectorMulCUDAv4(float *C, float *A, float *B, int wA, int hA) {
-
-  // Thread index
-  int tx = threadIdx.x;
-
-  // Store a final matrix row x vector multiplication 
-  float sum = 0;
-  	
-  // Loop through all the matrix rows     
-  for (int y = 0; y < hA; y++){ 
-	// Store a matrix row x vector multiplication per thread 
-	__shared__ float sum_vec[BLOCK_SIZE];
-	sum_vec[tx] = 0;
-	  	
-	// Wait for reset
-	__syncthreads();
-  		  
-	// Move through one matrix row
-	#pragma unroll
-	for (int x = 0; x < wA; x += BLOCK_SIZE) 
-	 	sum_vec[tx] += A[tx + x] * B[tx + x];
-	  
-	__syncthreads();
-	  
-	// Make one thread perform the final addition of elements for a given row 
-	// and write to the device memory
-	if (tx == 0){
-    		#pragma unroll	    
-	  	for (int cnt = 0; cnt < BLOCK_SIZE; cnt++) 
-		  	sum += sum_vec[cnt];
-		  	
-  		// Write to device memory a matrix row x vector multiplication
-	  	C[y] = sum;
-  	  	sum = 0;
-	}
-	
-	// Wait until thread 0 has finished before proceeding to another row
-	__syncthreads();
-   }
-   
-   
-}
-
-
-/* convImgCUDAv2
- *
- * Description: CUDA kernel for the convolution of two matrices
- *		In contrast to convImgCUDA, this compute kernel works indepedently of the matrix width
- *		In Jetson AGX Orin 64 GB, it is advisable to make use of the 4 processing blocks 
- *		(i.e., use at least a BLOCK_SIZE >= n*128 being n 1,2,...8) for faster computations
+ * Description: CUDA kernel for the 2D convolution of two matrices. 
+ *		 Borders are not processed.
+ *		 The block ID is used for selecting the input matrix row.
  *
  * template:
  *		- int BLOCK_SIZE: Number of threads making up a block 
  *		- int KERNEL_SIZE: Size of the filter matrix 
  *
  * Parameter:   
- *		- float *imgf: Resultant matrix of image
- *		- float *img: Input matrix of image
+ *		- float *imgf: Resultant matrix
+ *		- float *img: Input matrix
  *		- float *kernel: Filter matrix
- *		- float Nx: img width
+ *		- int Nx: img width
+ *		- int Ny: img height
  *
  * Returns:     Nothing
  *
  * */
-template <int BLOCK_SIZE, const int KERNEL_SIZE> __global__ void convImgCUDAv2(float *imgf, float *img, float *kernel, int Nx, int Ny){
+template <int BLOCK_SIZE, const int KERNEL_SIZE> __global__ void conv2DCUDA(float *imgf, float *img, float *kernel, int Nx, int Ny){
 
   	// Block index
   	int bx = blockIdx.x;
@@ -265,13 +45,14 @@ template <int BLOCK_SIZE, const int KERNEL_SIZE> __global__ void convImgCUDAv2(f
 
 	// each thread is assigned to a pixel of a row, ix integer index of x
 	int ix = tx + center;
-	
-	
-	const int K2 = KERNEL_SIZE*KERNEL_SIZE;
-	// Locked data for the current thread block
-	__shared__ float sdata[K2];
 
-	if (tx<K2)
+	// Kernel max size
+	const int FILTER_MAX_SIZE = KERNEL_SIZE*KERNEL_SIZE;
+	
+	// Locked data for the current thread block
+	__shared__ float sdata[FILTER_MAX_SIZE];
+
+	if (tx<FILTER_MAX_SIZE)
 	    sdata[tx] = kernel[tx];
 
 	// Wait until the filter matrix data is locked into the L1 cache
@@ -286,10 +67,11 @@ template <int BLOCK_SIZE, const int KERNEL_SIZE> __global__ void convImgCUDAv2(f
 	for (int cnt = 0; cnt<Nx; cnt+= BLOCK_SIZE){
         	int idx = iy*Nx + (ix + cnt);
         	// Avoid borders
-	    	if (idx < Nx*Ny && ix + cnt != Nx-1 && ix + cnt != Nx && iy != Ny-1){
+	    	if (idx < Nx*Ny && ix + cnt < Nx-center && ix + cnt != Nx && iy < Ny-center){
 	    	    // Apply filter
 		    for (int ki = 0; ki<KERNEL_SIZE; ki++){
 			for (int kj = 0; kj<KERNEL_SIZE; kj++){
+			
 			   ii = kj + ix - center + cnt;
 			   jj = ki + iy - center;
 		    	   sum += img[jj*Nx + ii] * sdata[ki*KERNEL_SIZE + kj];
@@ -306,12 +88,162 @@ template <int BLOCK_SIZE, const int KERNEL_SIZE> __global__ void convImgCUDAv2(f
 
 }
 
+// 3d convolution where the depth of the input matrix and the filter are the same
+/* conv3D_normReLu
+ *
+ * Description: CUDA kernel for the 3D convolution of two matrices (feature and filter). 
+ *		 The convolution bias, batch normalization and ReLu operations
+ *		 are performed.
+ *		 The block ID is used for selecting the input matrix row.
+ *
+ * template:
+ *		- int BLOCK_SIZE: Number of threads making up a block 
+ *		- int KERNEL_SIZE: Size of the filter matrix 
+ *
+ * Parameter:   
+ *		- float *imgf: Resultant matrix
+ *		- float *img: Input matrix
+ *		- float *kernel: Filter matrix
+ *		- int kernel_id: Filter matrix being used
+ *		- int Nx: img width
+ *		- int Ny: img height
+ *		- int Nz: img depth
+ *		- int out_ch_offset: Number of output channels (number of filters)
+ *		- float conv_bias: Convolution bias
+ *		- float mean: Batch normalization mean
+ *		- float var: Batch normalization variance
+ *		- float weight: Batch normalization weight
+ *		- float bias: Batch normalization bias
+ *		- float EPSILON: Batch normalization epsilon (added to the variance to avoid dividing by zero)
+ *
+ * Returns:     Nothing
+ *
+ * */
+template <int BLOCK_SIZE, const int KERNEL_SIZE> __global__ void conv3D_normReLu(float *imgf, float *img, float *kernel, int kernel_id, unsigned Nx, unsigned Ny, unsigned Nz, int out_ch_offset, float conv_bias, float mean, float var, float weight, float bias, float EPSILON){
+
+	// Block index
+  	int bx = blockIdx.x;
+
+  	// Thread index
+	int tx = threadIdx.x;
+
+	// Lock depth data into the L1 cache
+  	volatile __shared__ float sdata[BLOCK_SIZE];
+
+        unsigned center = (KERNEL_SIZE - 1)/2;
+        unsigned xz_img_off = Nx*Nz;
+        unsigned xz_ker_off = KERNEL_SIZE*Nz;
+
+        unsigned xz_in_img_off = bx*Nx*out_ch_offset;
+
+        // Across the horizontal 
+        for (int cnt = 0; cnt<Nx; cnt++){
+
+		// Reset shared data
+		sdata[tx] = 0;
+
+		__syncthreads();
+
+		int idx = xz_in_img_off + cnt*out_ch_offset + kernel_id;
+		int ii, jj;
+
+		for (int kj = 0; kj<KERNEL_SIZE; kj++){
+	                jj = kj + (bx - center);
+
+	                if((jj >= 0) && (jj <= Ny-1)){
+
+		        for (int ki = 0; ki<KERNEL_SIZE; ki++){
+		           ii = ki + (cnt - center);
+
+		              if ((ii >= 0) && (ii <= Nx-1)){
+		                    // Across the depth 
+		                    for (int kk = tx; kk<Nz; kk+= BLOCK_SIZE)                    
+		                       sdata[tx] += img[jj*xz_img_off + ii*Nz + kk] * kernel[kj*xz_ker_off + ki*Nz + kk];    	                    
+		               }
+
+		          }
+
+		     }
+
+		 }
 
 
-/* maxUnpoolingImgCUDAv2
+		  __syncthreads();
+
+
+		  // Unroll the reduction method  
+		  if (BLOCK_SIZE >= 1024){ 
+		  	if(tx < 512)
+		  		sdata[tx] += sdata[tx + 512]; 
+
+			__syncthreads(); 
+
+		  }
+		  if (BLOCK_SIZE >= 512){ 
+			  if(tx < 256)
+			  	sdata[tx] += sdata[tx + 256]; 
+
+			__syncthreads(); 
+
+		  }
+		  if (BLOCK_SIZE >= 256){ 
+			  if(tx < 128)
+			  	sdata[tx] += sdata[tx + 128]; 
+
+			__syncthreads(); 
+
+		  }
+		  if (BLOCK_SIZE >= 128){ 
+			  if(tx < 64)
+			  	sdata[tx] += sdata[tx + 64]; 
+
+			__syncthreads(); 
+
+		  }
+
+		  // No need of sync when a single warp is involved
+		  if (tx < 32){
+		  	if (BLOCK_SIZE >= 64) 
+		 		sdata[tx] += sdata[tx + 32];
+
+		  	if (BLOCK_SIZE >= 32) 
+		 		sdata[tx] += sdata[tx + 16];
+
+		 	if (BLOCK_SIZE >= 16) 
+		 		sdata[tx] += sdata[tx + 8];
+
+		  	if (BLOCK_SIZE >= 8) 
+		 		sdata[tx] += sdata[tx + 4];
+
+		  	if (BLOCK_SIZE >= 4) 
+		 		sdata[tx] += sdata[tx + 2];
+
+		  	if (BLOCK_SIZE >= 2) 
+		  		sdata[tx] += sdata[tx + 1];
+
+		  } 
+
+	   	 if(tx == 0){
+			 // Add element of the final image matrix in the device
+			 imgf[idx] = (sdata[tx] + conv_bias);
+			 // Batch normalization
+		 	 imgf[idx] = ((imgf[idx] - mean)/sqrtf(var + EPSILON)) * (weight) + bias;
+		  	 // ReLu (max(0,x))
+		 	 imgf[idx] = (imgf[idx] < 0) ? 0 : imgf[idx];	        
+		 }
+
+       }  
+
+
+}
+
+
+
+/* nnUnpoolingCUDA
  *
  * Description: CUDA kernel for Nearest-Neighbor upsampling a matrix. 
- *		The threads move across the output image.
+ *		The threads move across the output image. 
+ *		The block ID is used for selecting the input matrix row.
  *
  * template:
  *		- int BLOCK_SIZE: Number of threads making up a block 
@@ -320,12 +252,12 @@ template <int BLOCK_SIZE, const int KERNEL_SIZE> __global__ void convImgCUDAv2(f
  * Parameter:   
  *		- float *imgf: Resultant matrix of image
  *		- float *img: Input matrix of image
- *		- float Nx: img width
+ *		- int Nx: img width
  *
  * Returns:     Nothing
  *
  * */
-template <int BLOCK_SIZE, int UP_SAMP_SIZE> __global__ void nnUnpoolingImgCUDAv2(float *imgf, float *img, int Nx){
+template <int BLOCK_SIZE, int UP_SAMP_SIZE> __global__ void nnUnpoolingCUDA(float *imgf, float *img, int Nx){
 
   	// Block index
   	int bx = blockIdx.x;
@@ -346,44 +278,6 @@ template <int BLOCK_SIZE, int UP_SAMP_SIZE> __global__ void nnUnpoolingImgCUDAv2
 }
 
 
- /* vectorAddCUDAv2
- *
- * Description: CUDA kernel for vector addition. 
- *		In contrast to vectorAddCUDA, this kernel adds the result in one of the input vectors.
- *
- * Parameter:   
- *		- float *B: Second and resultant vector
- *		- float *A: First vector
- *		- float numElements: Vector size
- *
- * Returns:     Nothing
- *
- * */
-__global__ void vectorAddCUDAv2(float *B, const float *A, int numElements){
-    int idx = blockDim.x * blockIdx.x + threadIdx.x;
-
-    B[idx] += A[idx]; 
-}
-
-
- /* vectorResetCUDA
- *
- * Description: CUDA kernel for reseting the values of a vector. 
- *
- * Parameter:   
- *		- float *A: Vector to reset
- *		- float numElements: Vector size
- *
- * Returns:     Nothing
- *
- * */
-__global__ void vectorResetCUDA(float *A, int numElements){
-    int i = blockDim.x * blockIdx.x + threadIdx.x;
-
-    if (i < numElements)
-        A[i] = 0; 
-}
-
  /* reset_data
  *
  * Description: CUDA kernel for reseting the values of a vector. 
@@ -402,10 +296,61 @@ __global__ void vectorResetCUDA(float *A, int numElements){
 __global__ void reset_data(int* data_streaming, int const* lut_persistent, size_t data_streaming_size, size_t lut_persistent_size){
     size_t const idx = blockDim.x * blockIdx.x + threadIdx.x;
     size_t const stride = blockDim.x * gridDim.x;
-    
+   
     for (size_t i = idx; i < data_streaming_size; i += stride)
     	data_streaming[i] = lut_persistent[i % lut_persistent_size];
-    
+ 
 }
+
+
+ /* get_smid
+ *
+ * Description: CUDA function that returns the SM ID on which the block is being executed
+ *
+ * Parameter:   None
+ *
+ * Returns:     Nothing
+ *
+ * */
+__device__ __inline__ uint get_smid(void){
+	uint sm_id;
+	asm volatile ("mov.u32 %0, %smid;" : "=r"(sm_id));
+	
+	return sm_id;
+
+}
+
+ /* persistent_reset_data
+ *
+ * Description: CUDA kernel for reseting the values of a vector. 
+ *		Like "reset_data" but with the possibility of running
+ *		persistently.
+ *
+ * Parameter:   
+ *		- int* data_streaming: Vector to reset
+ *		- int const* lut_persistent: Vector used to reset data_streaming with
+ *		- size_t data_streaming_size: Size of data_streaming
+ *		- size_t lut_persistent_size: Size of lut_persistent
+  *		- unsigned* active: Flag signaling whether to keep executing or not 
+ *
+ * Returns:     Nothing
+ *
+ * */
+__global__ void persistent_reset_data(int* data_streaming, int const* lut_persistent, size_t data_streaming_size, size_t lut_persistent_size, unsigned* active){
+    size_t const idx = blockDim.x * blockIdx.x + threadIdx.x;
+    size_t const stride = blockDim.x * gridDim.x;
+    
+    /*
+    if(threadIdx.x == 0)
+    	printf("persistent_reset_data SM ID: %d \n ", get_smid());
+    */
+
+    while(*active){
+    	for(size_t i = idx; i < data_streaming_size; i += stride)
+    		data_streaming[i] = lut_persistent[i % lut_persistent_size];
+    }
+
+}
+
 
 

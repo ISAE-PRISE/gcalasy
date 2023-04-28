@@ -1,24 +1,9 @@
-// ---------------------------------------------------------------------
-// ---------------------------------------------------------------------
-// GCALASY project
-// Copyright (C) 2023 ISAE
-// 
-// Purpose:
-// Studying the response of cache memory interference to hardware-based 
-// cache locking technique on iGPUs
-//
-// Contacts:
-// alfonso.mascarenas-gonzalez@isae-supaero.fr
-// jean-baptiste.chaudron@isae-supaero.fr
-// ---------------------------------------------------------------------
-// ---------------------------------------------------------------------
-
 /*--------------------------- gpu_cache_locking.cuh ---------------------
 |  File gpu_cache_locking.cuh
 |
 |  Description: Declarations for the GPU cache locking set up  
 |
-|  Version: 1.0
+|  Version: 1.1
 *-----------------------------------------------------------------------*/
 
  
@@ -83,13 +68,40 @@ void set_l2_locking_attr(cudaStreamAttrValue* stream_attribute, float persistent
   // Set performance hint for the persisting L2 cache
   checkCudaErrors(cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, locked_data_size));
 
-  stream_attribute->accessPolicyWindow.base_ptr = reinterpret_cast<void*>(persistent_data_ptr);
+  stream_attribute->accessPolicyWindow.base_ptr = persistent_data_ptr;
   stream_attribute->accessPolicyWindow.num_bytes = locked_data_size;
   stream_attribute->accessPolicyWindow.hitRatio = 1.0;
   stream_attribute->accessPolicyWindow.hitProp = cudaAccessPropertyPersisting;
   stream_attribute->accessPolicyWindow.missProp = cudaAccessPropertyStreaming;
 
   #ifdef PRINT_ALL
-  print_stream_attr_prop(*stream_attribute);
+	  print_stream_attr_prop(*stream_attribute);
   #endif
 }
+
+
+/* reset_l2_locking_attr
+ *
+ * Description: Resets the L2 persistent attributes for a given stream
+ *
+ * Parameter:   
+ * 		- cudaStreamAttrValue stream_attribute: Attributes of the stream
+ *		- cudaStream_t stream: Stream used for updating the L2 persistent attribute   
+ *
+ * Returns:     Nothing
+ *
+ * */
+void reset_l2_locking_attr(cudaStreamAttrValue* stream_attribute, cudaStream_t stream){
+
+  // Clean L2 cache locking
+  stream_attribute->accessPolicyWindow.num_bytes = 0;                                          
+  cudaStreamSetAttribute(stream, cudaStreamAttributeAccessPolicyWindow, stream_attribute);   
+  cudaCtxResetPersistingL2Cache();                                                           
+
+  #ifdef PRINT_ALL
+	  print_stream_attr_prop(*stream_attribute);
+  #endif
+}
+
+
+

@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------
-// ---------------------------------------------------------------------
-// GCALASY project
-// Copyright (C) 2023 ISAE
-// 
-// Purpose:
-// Studying the response of cache memory interference to hardware-based 
-// cache locking technique on iGPUs
-//
-// Contacts:
-// alfonso.mascarenas-gonzalez@isae-supaero.fr
-// jean-baptiste.chaudron@isae-supaero.fr
-// ---------------------------------------------------------------------
-// ---------------------------------------------------------------------
-
 /*--------------------------- gpu_clock_meas.cuh ------------------------
 |  File gpu_clock_meas.cuh
 |
@@ -63,8 +48,10 @@ void init_clock(){
 void calculate_time_diff_clock(int nb_iter){
    if (*clock_end_host > *clock_start_host)
    	latency = (*clock_end_host - *clock_start_host) / nb_iter;   
-    else
+    else{
     	latency = ((0xFFFFFFFFFFFFFFFF - *clock_start_host) + *clock_end_host) / nb_iter;
+//    	printf("Start %lld End %lld \n", *clock_start_host, *clock_end_host);
+    	}
 }
 
 
@@ -114,7 +101,6 @@ void clean_clock(){
 __global__ void getDeviceTimeCUDA(long long int* saved_time){
 	*saved_time = clock64();
 }
-
 
 
 

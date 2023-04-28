@@ -1,0 +1,4 @@
+The aim of this project is to analyze the effect of L2 cache locking for interference mitigation in three scenarios: 
+1. Inter-SM interference with one application
+2. Inter-SM interference with several applications (mix-criticality scenario)
+3. LPDDR5 memory and inter-SM interference with one application
